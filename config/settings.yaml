@@ -1,0 +1,16 @@
+rate_limit:
+  min_seconds: 3
+  max_seconds: 8
+http:
+  timeout_seconds: 15
+  max_retries: 3
+  user_agent: "Mozilla/5.0 (compatible; ThermalComfortResearchBot/1.0)"
+ollama:
+  base_url: "http://localhost:11434"
+  model: "qwen2.5:7b-instruct"
+  max_retries: 2
+paths:
+  raw_posts: "data/processed/posts_raw.parquet"
+  classified_posts: "data/processed/posts_classified.parquet"
+  checkpoint: "data/checkpoints/progress.json"
+  output_dir: "data/output"

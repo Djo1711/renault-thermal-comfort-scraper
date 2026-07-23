@@ -1,0 +1,34 @@
+categories:
+  chauffage:
+    - chauffage
+    - "ne chauffe pas"
+    - "froid dans l'habitacle"
+  climatisation:
+    - climatisation
+    - "clim "
+    - climatiseur
+  ventilation:
+    - ventilation
+    - aération
+    - soufflerie
+  buee_desembuage:
+    - buée
+    - désembuage
+    - embué
+    - embuée
+  isolation_thermique:
+    - "isolation thermique"
+    - "déperdition de chaleur"
+    - "pont thermique"
+  odeur_hvac:
+    - "odeur de moisi"
+    - "mauvaise odeur clim"
+    - "odeur ventilation"
+  pompe_a_chaleur:
+    - "pompe à chaleur"
+    - " pac "
+  prechauffage:
+    - préchauffage
+    - préconditionnement
+    - "préchauffer la batterie"
+    - "préchauffer l'habitacle"
