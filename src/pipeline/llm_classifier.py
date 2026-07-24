@@ -9,7 +9,13 @@ SYSTEM_PROMPT = (
     "Tu es un assistant qui analyse des verbatims d'automobilistes français à propos du confort "
     "thermique de leur véhicule (chauffage, climatisation, ventilation, buée/désembuage, isolation "
     "thermique, odeur des systèmes de ventilation/climatisation, pompe à chaleur, préchauffage "
-    "habitacle/batterie). Réponds STRICTEMENT au format JSON demandé, sans texte autour."
+    "habitacle/batterie). "
+    "Règle de cohérence OBLIGATOIRE entre les champs pertinent_confort_thermique et type_probleme : "
+    "si tu identifies au moins un type de problème de confort thermique dans type_probleme, alors "
+    "pertinent_confort_thermique DOIT être true. Si aucun type de problème de confort thermique "
+    "n'est identifié, alors type_probleme doit être une liste vide ET pertinent_confort_thermique "
+    "doit être false. Ces deux champs ne doivent jamais se contredire. "
+    "Réponds STRICTEMENT au format JSON demandé, sans texte autour."
 )
 
 RESPONSE_SCHEMA = LLMClassificationResult.model_json_schema()
