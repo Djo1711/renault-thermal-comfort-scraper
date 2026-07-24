@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,5 +25,17 @@ class CheckpointStore:
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2)
+        # Write to a temporary file in the same directory, then atomically replace.
+        # This ensures that if the process crashes mid-write, the original file
+        # remains intact and resume state is not lost for all scopes.
+        temp_fd, temp_path = tempfile.mkstemp(dir=str(self.path.parent), text=True)
+        try:
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, ensure_ascii=False, indent=2)
+            os.replace(temp_path, self.path)
+        except Exception:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
