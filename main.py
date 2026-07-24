@@ -29,18 +29,25 @@ def cli():
     pass
 
 
-def _scrape_automobile_propre(scraper: AutomobilePropreScraper) -> list[RawPost]:
-    posts: list[RawPost] = []
+def _scrape_automobile_propre(scraper: AutomobilePropreScraper, raw_posts_path: str) -> int:
+    """Scrape all target brands/subforums/topics, writing each topic's posts to disk
+    as soon as it is scraped so a mid-run interruption cannot lose already-scraped
+    content. Returns the total number of newly written posts."""
+    written_total = 0
     for brand, brand_url in scraper.discover_brand_forums().items():
         for model, model_url in scraper.discover_subforums(brand_url).items():
             scope = f"automobile_propre:{brand}:{model}"
             for topic_url in scraper.iter_topic_urls(model_url, scope):
-                posts.extend(scraper.scrape_topic(topic_url, brand=brand, model=model))
-    return posts
+                topic_posts = scraper.scrape_topic(topic_url, brand=brand, model=model)
+                written_total += append_posts(raw_posts_path, topic_posts)
+    return written_total
 
 
-def _scrape_caradisiac(scraper: CaradisiacScraper) -> list[RawPost]:
-    posts: list[RawPost] = []
+def _scrape_caradisiac(scraper: CaradisiacScraper, raw_posts_path: str) -> int:
+    """Scrape all target brand hubs/model hubs/avis, writing each avis to disk as
+    soon as it is scraped so a mid-run interruption cannot lose already-scraped
+    content. Returns the total number of newly written posts."""
+    written_total = 0
     for brand, brand_hub_url in scraper.discover_brand_hubs().items():
         model_scope = f"caradisiac:{brand}"
         for model_hub_url in scraper.iter_model_hub_urls(brand_hub_url, scope=model_scope):
@@ -48,8 +55,8 @@ def _scrape_caradisiac(scraper: CaradisiacScraper) -> list[RawPost]:
             for avis_url in scraper.iter_avis_urls(model_hub_url, scope=avis_scope):
                 post = scraper.scrape_avis(avis_url)
                 if post:
-                    posts.append(post)
-    return posts
+                    written_total += append_posts(raw_posts_path, [post])
+    return written_total
 
 
 @cli.command()
@@ -71,14 +78,14 @@ def scrape(source):
     )
 
     for src_name in sources:
+        raw_posts_path = SETTINGS["paths"]["raw_posts"]
         if src_name == "automobile_propre":
             scraper = AutomobilePropreScraper(target_brands=VEHICLE_LIST, **common_kwargs)
-            posts = _scrape_automobile_propre(scraper)
+            written = _scrape_automobile_propre(scraper, raw_posts_path)
         else:
             scraper = CaradisiacScraper(target_brands=VEHICLE_LIST, **common_kwargs)
-            posts = _scrape_caradisiac(scraper)
+            written = _scrape_caradisiac(scraper, raw_posts_path)
 
-        written = append_posts(SETTINGS["paths"]["raw_posts"], posts)
         logger.info("%s: %d nouveaux posts écrits", src_name, written)
         console.print(f"[green]{src_name}[/green] : {written} nouveaux posts")
 

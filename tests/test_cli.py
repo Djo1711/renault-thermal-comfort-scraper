@@ -86,6 +86,69 @@ def test_export_command_writes_output_files(tmp_path, monkeypatch):
     assert (output_dir / "stats_marque_modele_sentiment.parquet").exists()
 
 
+def make_fake_automobile_propre_scraper(scrape_topic_fn):
+    """Builds a stub class usable as a drop-in replacement for
+    main.AutomobilePropreScraper, exposing two topics discovered under a single
+    brand/model. `scrape_topic_fn(topic_url)` is invoked for each topic and its
+    return value (or raised exception) becomes the result of `scrape_topic`.
+    """
+
+    class FakeAutomobilePropreScraper:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def discover_brand_forums(self):
+            return {"Renault": "https://x/forums/renault"}
+
+        def discover_subforums(self, brand_url):
+            return {"Zoe": "https://x/forums/renault/zoe"}
+
+        def iter_topic_urls(self, subforum_url, scope):
+            yield "https://x/topic/1"
+            yield "https://x/topic/2"
+
+        def scrape_topic(self, topic_url, brand, model):
+            return scrape_topic_fn(topic_url)
+
+    return FakeAutomobilePropreScraper
+
+
+def test_scrape_writes_posts_incrementally_surviving_mid_run_crash(tmp_path, monkeypatch):
+    """Regression test for the data-loss bug: previously all scraped posts were
+    accumulated in memory for the whole run and written to disk only once at the
+    end. If the run crashed partway through, everything scraped so far was lost
+    even though the checkpoint had already marked those topic URLs as seen. This
+    test scrapes two topics where the second one raises, and asserts the first
+    topic's post was still persisted to disk despite the crash.
+    """
+    raw_path = tmp_path / "posts_raw.parquet"
+    checkpoint_path = tmp_path / "progress.json"
+    monkeypatch.setitem(main.SETTINGS["paths"], "raw_posts", str(raw_path))
+    monkeypatch.setitem(main.SETTINGS["paths"], "checkpoint", str(checkpoint_path))
+
+    calls = []
+
+    def scrape_topic_fn(topic_url):
+        calls.append(topic_url)
+        if topic_url == "https://x/topic/2":
+            raise RuntimeError("simulated crash after topic 1 was scraped")
+        return [make_raw_post("t1", "le chauffage ne fonctionne plus")]
+
+    monkeypatch.setattr(
+        main, "AutomobilePropreScraper", make_fake_automobile_propre_scraper(scrape_topic_fn)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main.cli, ["scrape", "--source", "automobile_propre"])
+
+    assert calls == ["https://x/topic/1", "https://x/topic/2"]
+    assert result.exception is not None
+
+    # Despite the crash on topic 2, topic 1's post must already be on disk.
+    saved = read_posts(raw_path, RawPost)
+    assert [p.id for p in saved] == ["t1"]
+
+
 def test_classify_prefilters_before_calling_llm(tmp_path, monkeypatch):
     raw_path = tmp_path / "posts_raw.parquet"
     classified_path = tmp_path / "posts_classified.parquet"
