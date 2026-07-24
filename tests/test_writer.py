@@ -49,3 +49,33 @@ def test_read_posts_reconstructs_pydantic_models(tmp_path):
 
 def test_read_posts_empty_list_when_no_file(tmp_path):
     assert read_posts(tmp_path / "missing.parquet", RawPost) == []
+
+
+def test_append_posts_empty_list_nonexistent_file(tmp_path):
+    """Appending empty list to nonexistent file should be a no-op, returning 0."""
+    path = tmp_path / "posts_raw.parquet"
+    written = append_posts(path, [])
+    assert written == 0
+    # File should not exist or be usable
+    # Verify that a subsequent call with real posts works correctly
+    written_next = append_posts(path, [make_post("1")])
+    assert written_next == 1
+    assert read_existing_ids(path) == {make_post("1").id}
+
+
+def test_append_posts_empty_list_existing_file(tmp_path):
+    """Appending empty list to existing file should be a no-op, preserving content."""
+    path = tmp_path / "posts_raw.parquet"
+    # First, populate the file
+    append_posts(path, [make_post("1"), make_post("2")])
+    original_ids = read_existing_ids(path)
+    original_posts = read_posts(path, RawPost)
+    assert len(original_posts) == 2
+
+    # Now try to append an empty list
+    written = append_posts(path, [])
+    assert written == 0
+
+    # Verify content is unchanged
+    assert read_existing_ids(path) == original_ids
+    assert read_posts(path, RawPost) == original_posts

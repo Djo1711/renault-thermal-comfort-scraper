@@ -17,6 +17,8 @@ def read_existing_ids(path: str | Path) -> set[str]:
 
 
 def append_posts(path: str | Path, posts: list[BaseModel]) -> int:
+    if not posts:
+        return 0
     path = Path(path)
     new_rows = [p.model_dump(mode="json") for p in posts]
     new_df = pd.DataFrame(new_rows)
