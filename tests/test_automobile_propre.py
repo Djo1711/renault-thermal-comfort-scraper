@@ -59,13 +59,61 @@ def test_iter_topic_urls_stops_when_page_repeats_same_topics(tmp_path):
         body=load_fixture("automobile_propre_topic_list_page2_repeat.html"),
         status=200,
     )
+    scope = "automobile_propre:renault:megane-e-tech"
     scraper = make_scraper(tmp_path)
-    urls = list(scraper.iter_topic_urls(subforum_url, scope="automobile_propre:renault:megane-e-tech"))
+    urls = list(scraper.iter_topic_urls(subforum_url, scope=scope))
     assert urls == [
         "https://forums.automobile-propre.com/forums/topic/1001-buee-persistante/",
         "https://forums.automobile-propre.com/forums/topic/1002-autonomie-hiver/",
     ]
     assert len(responses.calls) == 2
+
+    # The checkpoint must actually be persisted to disk (page 1's topics seen,
+    # stopped after page 1 since page 2 repeated the same topics), not just
+    # reflected in the yielded urls.
+    progress = scraper.checkpoint.get_progress(scope)
+    assert progress["last_page"] == 1
+    assert set(progress["seen_ids"]) == {
+        "https://forums.automobile-propre.com/forums/topic/1001-buee-persistante/",
+        "https://forums.automobile-propre.com/forums/topic/1002-autonomie-hiver/",
+    }
+
+
+@responses.activate
+def test_iter_topic_urls_resumes_from_checkpoint(tmp_path):
+    subforum_url = "https://forums.automobile-propre.com/forums/forum/45-megane-e-tech/"
+    scope = "automobile_propre:renault:megane-e-tech"
+    seen_urls = {
+        "https://forums.automobile-propre.com/forums/topic/1001-buee-persistante/",
+        "https://forums.automobile-propre.com/forums/topic/1002-autonomie-hiver/",
+    }
+    checkpoint = CheckpointStore(tmp_path / "progress.json")
+    checkpoint.update_progress(scope, last_page=1, seen_ids=seen_urls)
+
+    responses.add(
+        responses.GET,
+        f"{subforum_url}?page=2",
+        body=load_fixture("automobile_propre_topic_list_page2_repeat.html"),
+        status=200,
+    )
+
+    scraper = AutomobilePropreScraper(
+        target_brands=["Renault", "Peugeot"],
+        checkpoint_store=checkpoint,
+        min_delay=0,
+        max_delay=0,
+    )
+    urls = list(scraper.iter_topic_urls(subforum_url, scope=scope))
+
+    # Resume must jump straight to page 2 (no request to the base/page-1 url)
+    # and yield nothing new since page 2 repeats already-seen topics.
+    assert urls == []
+    assert len(responses.calls) == 1
+    assert responses.calls[0].request.url == f"{subforum_url}?page=2"
+
+    progress = checkpoint.get_progress(scope)
+    assert progress["last_page"] == 1
+    assert set(progress["seen_ids"]) == seen_urls
 
 
 @responses.activate
