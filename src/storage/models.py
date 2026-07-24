@@ -2,11 +2,23 @@ import hashlib
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field
 
 Confidence = Literal["haute", "moyenne", "basse"]
 
 PROBLEM_TYPES = [
+    "chauffage",
+    "climatisation",
+    "ventilation",
+    "buee_desembuage",
+    "isolation_thermique",
+    "odeur_hvac",
+    "pompe_a_chaleur",
+    "prechauffage",
+    "autre",
+]
+
+ProblemType = Literal[
     "chauffage",
     "climatisation",
     "ventilation",
@@ -52,28 +64,13 @@ class LLMClassificationResult(BaseModel):
     pertinent_confort_thermique: bool
     pertinence_confidence: Confidence
     vehicule: VehicleInfo
-    type_probleme: list[str] = []
+    type_probleme: list[ProblemType] = []
     type_probleme_confidence: Optional[Confidence] = None
     zone_vehicule: Optional[str] = None
-    sentiment: int
+    sentiment: int = Field(ge=1, le=5)
     sentiment_confidence: Confidence
     resume_probleme: Optional[str] = None
     extrait_source: Optional[str] = None
-
-    @field_validator("sentiment")
-    @classmethod
-    def sentiment_in_range(cls, v: int) -> int:
-        if not 1 <= v <= 5:
-            raise ValueError("sentiment must be between 1 and 5")
-        return v
-
-    @field_validator("type_probleme")
-    @classmethod
-    def type_probleme_known(cls, v: list[str]) -> list[str]:
-        unknown = [t for t in v if t not in PROBLEM_TYPES]
-        if unknown:
-            raise ValueError(f"type_probleme inconnu: {unknown}")
-        return v
 
 
 class ClassifiedPost(BaseModel):
