@@ -10,11 +10,18 @@ def to_dataframe(posts: list[ClassifiedPost]) -> pd.DataFrame:
 
 
 def relevant_only(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        # An empty input (e.g. from to_dataframe([]) or an empty classified
+        # parquet file) has zero columns, so indexing "pertinent_confort_thermique"
+        # would raise KeyError. Return it unchanged rather than crash.
+        return df
     return df[df["pertinent_confort_thermique"] & ~df["classification_echec"]]
 
 
 def stats_by_brand_model_sentiment(df: pd.DataFrame) -> pd.DataFrame:
     relevant = relevant_only(df)
+    if relevant.empty:
+        return pd.DataFrame(columns=["vehicule_marque", "vehicule_modele", "sentiment", "count"])
     return (
         relevant.groupby(["vehicule_marque", "vehicule_modele", "sentiment"])
         .size()
@@ -24,11 +31,15 @@ def stats_by_brand_model_sentiment(df: pd.DataFrame) -> pd.DataFrame:
 
 def stats_by_source(df: pd.DataFrame) -> pd.DataFrame:
     relevant = relevant_only(df)
+    if relevant.empty:
+        return pd.DataFrame(columns=["source", "count"])
     return relevant.groupby("source").size().reset_index(name="count")
 
 
 def stats_by_month(df: pd.DataFrame) -> pd.DataFrame:
     relevant = relevant_only(df).copy()
+    if relevant.empty:
+        return pd.DataFrame(columns=["month", "count"])
     relevant["published_at"] = pd.to_datetime(relevant["published_at"])
     relevant["month"] = relevant["published_at"].dt.to_period("M").astype(str)
     return relevant.groupby("month").size().reset_index(name="count")

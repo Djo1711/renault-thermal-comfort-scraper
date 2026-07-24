@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 
+import pandas as pd
+
 from src.pipeline.export import (
+    export_all,
     stats_by_brand_model_sentiment,
     stats_by_month,
     stats_by_source,
@@ -63,3 +66,50 @@ def test_stats_by_month_groups_by_publication_month():
     counts = dict(zip(stats["month"], stats["count"]))
     assert counts["2024-01"] == 2
     assert counts["2024-02"] == 1
+
+
+def test_export_all_writes_four_parquet_files_with_unfiltered_and_filtered_counts(tmp_path):
+    posts = [
+        make_classified(id="1", vehicule_marque="Renault", vehicule_modele="Zoe", sentiment=2),
+        make_classified(id="2", pertinent_confort_thermique=False),
+        make_classified(id="3", classification_echec=True),
+    ]
+    classified_path = tmp_path / "classified.parquet"
+    to_dataframe(posts).to_parquet(classified_path, index=False)
+
+    output_dir = tmp_path / "exports"
+    outputs = export_all(classified_path, output_dir)
+
+    assert set(outputs.keys()) == {
+        "verbatims",
+        "stats_marque_modele_sentiment",
+        "stats_source",
+        "stats_mois",
+    }
+    for path in outputs.values():
+        assert path.exists()
+
+    verbatims = pd.read_parquet(outputs["verbatims"])
+    assert len(verbatims) == 3
+
+    stats_source = pd.read_parquet(outputs["stats_source"])
+    assert stats_source["count"].sum() == 1
+
+    stats_marque = pd.read_parquet(outputs["stats_marque_modele_sentiment"])
+    assert stats_marque["count"].sum() == 1
+
+
+def test_export_all_on_empty_classified_parquet_does_not_crash(tmp_path):
+    classified_path = tmp_path / "classified_empty.parquet"
+    to_dataframe([]).to_parquet(classified_path, index=False)
+
+    output_dir = tmp_path / "exports_empty"
+    outputs = export_all(classified_path, output_dir)
+
+    for path in outputs.values():
+        assert path.exists()
+
+    assert len(pd.read_parquet(outputs["verbatims"])) == 0
+    assert len(pd.read_parquet(outputs["stats_marque_modele_sentiment"])) == 0
+    assert len(pd.read_parquet(outputs["stats_source"])) == 0
+    assert len(pd.read_parquet(outputs["stats_mois"])) == 0
