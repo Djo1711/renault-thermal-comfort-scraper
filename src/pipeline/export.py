@@ -40,7 +40,9 @@ def stats_by_month(df: pd.DataFrame) -> pd.DataFrame:
     relevant = relevant_only(df).copy()
     if relevant.empty:
         return pd.DataFrame(columns=["month", "count"])
-    relevant["published_at"] = pd.to_datetime(relevant["published_at"])
+    relevant["published_at"] = pd.to_datetime(
+        relevant["published_at"], format="ISO8601", utc=True
+    ).dt.tz_localize(None)
     relevant["month"] = relevant["published_at"].dt.to_period("M").astype(str)
     return relevant.groupby("month").size().reset_index(name="count")
 

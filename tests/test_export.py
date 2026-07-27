@@ -68,6 +68,32 @@ def test_stats_by_month_groups_by_publication_month():
     assert counts["2024-02"] == 1
 
 
+def test_stats_by_month_handles_mixed_timestamp_precision_across_sources():
+    # Regression test: automobile_propre yields whole-second ISO timestamps
+    # ("...T14:36:47Z") while caradisiac yields fractional-second timestamps
+    # ("...T16:40:33.123000Z"). pandas.to_datetime infers a single format from
+    # the first row and previously raised ValueError when a later row didn't
+    # match that inferred format. Both real-world shapes must parse without
+    # crashing and bucket into the correct month.
+    posts = [
+        make_classified(
+            id="ap1",
+            source="automobile_propre",
+            published_at="2020-10-14T14:36:47Z",
+        ),
+        make_classified(
+            id="cd1",
+            source="caradisiac",
+            published_at="2013-09-19T16:40:33.123000Z",
+        ),
+    ]
+    df = to_dataframe(posts)
+    stats = stats_by_month(df)
+    counts = dict(zip(stats["month"], stats["count"]))
+    assert counts["2020-10"] == 1
+    assert counts["2013-09"] == 1
+
+
 def test_export_all_writes_four_parquet_files_with_unfiltered_and_filtered_counts(tmp_path):
     posts = [
         make_classified(id="1", vehicule_marque="Renault", vehicule_modele="Zoe", sentiment=2),
