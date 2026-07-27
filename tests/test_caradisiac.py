@@ -33,6 +33,9 @@ def test_discover_brand_hubs_filters_target_brands(tmp_path):
 
 @responses.activate
 def test_iter_model_hub_urls_stops_when_page_repeats(tmp_path):
+    # On the real site, model-hub hrefs found on a brand-hub avis-listing page
+    # are RELATIVE (e.g. "/modele--renault-zoe/avis/"), not absolute -- the
+    # fixture mirrors that.
     brand_hub = "https://www.caradisiac.com/auto--renault/"
     responses.add(
         responses.GET, f"{brand_hub}avis/", body=load_fixture("caradisiac_brand_hub_page1.html"), status=200
@@ -45,32 +48,65 @@ def test_iter_model_hub_urls_stops_when_page_repeats(tmp_path):
     )
     scraper = make_scraper(tmp_path)
     urls = list(scraper.iter_model_hub_urls(brand_hub, scope="caradisiac:renault"))
+    # Even though the fixture's href attributes are relative, the scraper must
+    # resolve them to absolute URLs before yielding them.
     assert urls == [
-        "https://www.caradisiac.com/modele--renault-megane-e-tech/",
-        "https://www.caradisiac.com/modele--renault-zoe/",
+        "https://www.caradisiac.com/modele--renault-megane-e-tech/avis/",
+        "https://www.caradisiac.com/modele--renault-zoe/avis/",
     ]
+    assert all(u.startswith("https://www.caradisiac.com/") for u in urls)
     assert len(responses.calls) == 2
 
 
 @responses.activate
 def test_iter_avis_urls_stops_when_page_repeats(tmp_path):
-    model_hub = "https://www.caradisiac.com/modele--renault-megane-e-tech/"
+    # model_hub is already the page-1 avis-listing URL (it ends in "avis/"),
+    # exactly as produced by iter_model_hub_urls on the real site.
+    model_hub = "https://www.caradisiac.com/modele--renault-megane-e-tech/avis/"
     responses.add(
-        responses.GET, f"{model_hub}avis/", body=load_fixture("caradisiac_model_hub_page1.html"), status=200
+        responses.GET, model_hub, body=load_fixture("caradisiac_model_hub_page1.html"), status=200
     )
     responses.add(
         responses.GET,
-        f"{model_hub}avis_2/",
+        "https://www.caradisiac.com/modele--renault-megane-e-tech/avis_2/",
         body=load_fixture("caradisiac_model_hub_page2_repeat.html"),
         status=200,
     )
     scraper = make_scraper(tmp_path)
     urls = list(scraper.iter_avis_urls(model_hub, scope="caradisiac:renault:megane-e-tech"))
+    # Fixture hrefs are relative; they must be resolved to absolute URLs.
     assert urls == [
         "https://www.caradisiac.com/avis--modele--renault-megane-e-tech/abc123/",
         "https://www.caradisiac.com/avis--modele--renault-megane-e-tech/def456/",
     ]
     assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_iter_avis_urls_page_url_has_no_double_avis_segment(tmp_path):
+    # Regression test for the "/avis/avis/" bug: model_hub_url already ends in
+    # "avis/" (it's the page-1 listing URL, not a bare model root), so page 2
+    # must be requested at ".../avis_2/", never ".../avis/avis_2/" or
+    # ".../avis/avis/".
+    model_hub = "https://www.caradisiac.com/modele--renault-megane-e-tech/avis/"
+    responses.add(
+        responses.GET, model_hub, body=load_fixture("caradisiac_model_hub_page1.html"), status=200
+    )
+    responses.add(
+        responses.GET,
+        "https://www.caradisiac.com/modele--renault-megane-e-tech/avis_2/",
+        body=load_fixture("caradisiac_model_hub_page2_repeat.html"),
+        status=200,
+    )
+    scraper = make_scraper(tmp_path)
+    list(scraper.iter_avis_urls(model_hub, scope="caradisiac:renault:megane-e-tech:dbl"))
+
+    requested_urls = [call.request.url for call in responses.calls]
+    assert requested_urls == [
+        "https://www.caradisiac.com/modele--renault-megane-e-tech/avis/",
+        "https://www.caradisiac.com/modele--renault-megane-e-tech/avis_2/",
+    ]
+    assert "avis/avis" not in requested_urls[1]
 
 
 @responses.activate
@@ -83,6 +119,7 @@ def test_scrape_avis_extracts_from_json_ld_and_casts_year_to_str(tmp_path):
     assert post.brand_source == "Renault"
     assert post.model_source == "Megane E-Tech"
     assert post.year_source == "2022"
+    assert post.url == avis_url
     assert "désembuer" in post.text
     assert "Confort de conduite" in post.text
     assert "Désembuage lent" in post.text
@@ -104,7 +141,7 @@ def test_scrape_avis_returns_none_for_non_target_brand(tmp_path):
 
 @responses.activate
 def test_iter_avis_urls_resumes_from_checkpoint(tmp_path):
-    model_hub = "https://www.caradisiac.com/modele--renault-megane-e-tech/"
+    model_hub = "https://www.caradisiac.com/modele--renault-megane-e-tech/avis/"
     scope = "caradisiac:renault:megane-e-tech"
     seen_urls = {
         "https://www.caradisiac.com/avis--modele--renault-megane-e-tech/abc123/",
@@ -115,7 +152,7 @@ def test_iter_avis_urls_resumes_from_checkpoint(tmp_path):
 
     responses.add(
         responses.GET,
-        f"{model_hub}avis_2/",
+        "https://www.caradisiac.com/modele--renault-megane-e-tech/avis_2/",
         body=load_fixture("caradisiac_model_hub_page2_repeat.html"),
         status=200,
     )
@@ -132,7 +169,7 @@ def test_iter_avis_urls_resumes_from_checkpoint(tmp_path):
     # and yield nothing new since page 2 repeats already-seen avis links.
     assert urls == []
     assert len(responses.calls) == 1
-    assert responses.calls[0].request.url == f"{model_hub}avis_2/"
+    assert responses.calls[0].request.url == "https://www.caradisiac.com/modele--renault-megane-e-tech/avis_2/"
 
     progress = checkpoint.get_progress(scope)
     assert progress["last_page"] == 1

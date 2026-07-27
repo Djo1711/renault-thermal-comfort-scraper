@@ -1,12 +1,14 @@
 import json
 from datetime import datetime, timezone
 from typing import Callable, Iterator, Optional
+from urllib.parse import urljoin
 
 from src.scrapers.base import BaseScraper, HTTPStatusError
 from src.storage.models import RawPost, make_post_id
 from src.utils.checkpoint import CheckpointStore
 
-AVIS_INDEX_URL = "https://www.caradisiac.com/avis/"
+BASE_URL = "https://www.caradisiac.com"
+AVIS_INDEX_URL = f"{BASE_URL}/avis/"
 
 
 class CaradisiacScraper(BaseScraper):
@@ -19,7 +21,7 @@ class CaradisiacScraper(BaseScraper):
         soup = self.fetch(AVIS_INDEX_URL)
         hubs = {}
         for link in soup.select("a[href*='/auto--']"):
-            href = link["href"]
+            href = urljoin(BASE_URL, link["href"])
             slug = href.strip("/").split("--")[-1]
             if slug.lower() in self.target_brands:
                 hubs[slug.lower()] = href
@@ -39,7 +41,7 @@ class CaradisiacScraper(BaseScraper):
             except HTTPStatusError:
                 break
 
-            links = [a["href"] for a in soup.select(link_selector)]
+            links = [urljoin(BASE_URL, a["href"]) for a in soup.select(link_selector)]
             new_links = [u for u in links if u not in seen]
 
             if not new_links:
@@ -59,8 +61,16 @@ class CaradisiacScraper(BaseScraper):
         yield from self._iter_paginated_links(page_url, "a[href*='/modele--']", scope)
 
     def iter_avis_urls(self, model_hub_url: str, scope: str) -> Iterator[str]:
+        # model_hub_url is already the page-1 avis-listing URL (it ends in
+        # "avis/", as yielded by iter_model_hub_urls) -- it is NOT a bare
+        # model root that we should append "avis/" to. Doing so produces a
+        # double "avis/avis/" segment. Strip the trailing "avis/" once to
+        # recover the model's base prefix, then rebuild each page URL from it.
+        suffix = "avis/"
+        prefix = model_hub_url[: -len(suffix)] if model_hub_url.endswith(suffix) else model_hub_url
+
         def page_url(page: int) -> str:
-            return f"{model_hub_url}avis/" if page == 1 else f"{model_hub_url}avis_{page}/"
+            return f"{prefix}avis/" if page == 1 else f"{prefix}avis_{page}/"
 
         yield from self._iter_paginated_links(page_url, "a[href*='/avis--modele--']", scope)
 
