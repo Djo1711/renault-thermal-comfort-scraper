@@ -86,11 +86,16 @@ class LLMClassifier:
                     f"Ollama injoignable sur {self.base_url} — lance `ollama serve`"
                 ) from exc
 
-            content = response.json().get("message", {}).get("content", "")
             try:
+                content = response.json().get("message", {}).get("content", "")
                 data = json.loads(content)
                 return LLMClassificationResult(**data)
             except (json.JSONDecodeError, ValueError) as exc:
+                # Covers both a malformed "content" field inside a valid JSON
+                # envelope AND the envelope itself not being valid JSON at all
+                # (requests.exceptions.JSONDecodeError subclasses
+                # json.JSONDecodeError) -- either case counts as one invalid
+                # attempt, not an unhandled crash.
                 last_error = exc
 
         raise LLMResponseInvalidError(

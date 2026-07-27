@@ -4,6 +4,32 @@ from src.scrapers.base import BaseScraper, FetchError, HTTPStatusError
 
 
 @responses.activate
+def test_fetch_sleeps_with_exponential_backoff_between_retries(monkeypatch):
+    responses.add(responses.GET, "https://example.test/page", status=500)
+    responses.add(responses.GET, "https://example.test/page", status=500)
+    responses.add(responses.GET, "https://example.test/page", status=500)
+    scraper = BaseScraper("test_source", min_delay=0, max_delay=0, max_retries=3)
+
+    sleep_calls = []
+    monkeypatch.setattr(
+        "src.scrapers.base.time.sleep", lambda seconds: sleep_calls.append(seconds)
+    )
+
+    try:
+        scraper.fetch("https://example.test/page")
+        assert False, "aurait dû lever FetchError"
+    except FetchError:
+        pass
+
+    # 3 attempts -> 2 delays between them (no delay needed after the last
+    # failed attempt since we're giving up), each strictly positive and
+    # non-decreasing (exponential backoff).
+    assert len(sleep_calls) == 2
+    assert all(s > 0 for s in sleep_calls)
+    assert sleep_calls[1] >= sleep_calls[0]
+
+
+@responses.activate
 def test_fetch_returns_parsed_soup_on_success():
     responses.add(
         responses.GET,

@@ -100,6 +100,32 @@ def test_classify_raises_llm_response_invalid_after_max_retries():
 
 
 @responses.activate
+def test_classify_raises_llm_response_invalid_when_http_envelope_itself_is_not_json():
+    # Regression test: a 200 response whose BODY is not valid JSON at all (not
+    # just a malformed "content" field inside a valid envelope) previously
+    # raised an unhandled JSONDecodeError from response.json(), propagating out
+    # of classify() instead of being treated as one invalid-response attempt.
+    responses.add(
+        responses.POST,
+        "http://localhost:11434/api/chat",
+        body="not json at all",
+        status=200,
+        content_type="text/plain",
+    )
+    responses.add(
+        responses.POST,
+        "http://localhost:11434/api/chat",
+        body="not json at all",
+        status=200,
+        content_type="text/plain",
+    )
+    classifier = LLMClassifier(max_retries=2)
+    with pytest.raises(LLMResponseInvalidError):
+        classifier.classify(make_raw_post())
+    assert len(responses.calls) == 2
+
+
+@responses.activate
 def test_classify_raises_ollama_unavailable_immediately_without_retry():
     classifier = LLMClassifier(max_retries=2)
     with pytest.raises(OllamaUnavailableError):

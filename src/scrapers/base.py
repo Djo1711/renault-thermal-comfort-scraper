@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Optional
 
 import requests
@@ -49,6 +50,8 @@ class BaseScraper:
                 self.logger.warning(
                     "Tentative %d/%d échouée pour %s: %s", attempt, self.max_retries, url, exc
                 )
+                if attempt < self.max_retries:
+                    time.sleep(2 ** (attempt - 1))
                 continue
 
             if 400 <= response.status_code < 500:
@@ -57,6 +60,8 @@ class BaseScraper:
             if response.status_code >= 500:
                 last_error = FetchError(f"HTTP {response.status_code} sur {url}")
                 self.logger.warning("Tentative %d/%d: %s", attempt, self.max_retries, last_error)
+                if attempt < self.max_retries:
+                    time.sleep(2 ** (attempt - 1))
                 continue
 
             rate_limit_wait(self.min_delay, self.max_delay)
