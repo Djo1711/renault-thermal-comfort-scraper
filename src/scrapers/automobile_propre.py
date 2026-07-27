@@ -17,16 +17,26 @@ class AutomobilePropreScraper(BaseScraper):
     def discover_brand_forums(self) -> dict[str, str]:
         soup = self.fetch(FORUMS_URL)
         links = soup.select("[data-ips-hook='title'] a")
-        return {
-            link.get_text(strip=True): link["href"]
-            for link in links
-            if link.get_text(strip=True).lower() in self.target_brands
-        }
+        forums = {}
+        for link in links:
+            heading = link.get_text(strip=True)
+            if heading.lower() in self.target_brands:
+                forums[heading] = link["href"]
+            else:
+                self.logger.info(
+                    "Forum non ciblé ignoré: %r (aucune correspondance dans target_brands)",
+                    heading,
+                )
+        return forums
 
     def discover_subforums(self, brand_url: str) -> dict[str, str]:
         soup = self.fetch(brand_url)
         links = soup.select("[data-ips-hook='title'] a")
-        return {link.get_text(strip=True): link["href"] for link in links}
+        return {
+            link.get_text(strip=True): link["href"]
+            for link in links
+            if "/forum/" in link["href"] and link["href"] != brand_url
+        }
 
     def iter_topic_urls(self, subforum_url: str, scope: str) -> Iterator[str]:
         progress = self.checkpoint.get_progress(scope)

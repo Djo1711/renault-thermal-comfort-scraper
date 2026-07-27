@@ -1,4 +1,5 @@
 import json
+import unicodedata
 from datetime import datetime, timezone
 from typing import Callable, Iterator, Optional
 from urllib.parse import urljoin
@@ -11,10 +12,17 @@ BASE_URL = "https://www.caradisiac.com"
 AVIS_INDEX_URL = f"{BASE_URL}/avis/"
 
 
+def _normalize(s: str) -> str:
+    """Strip diacritics and lowercase, so "Citroën" (config/vehicle_list.yaml,
+    with the diaeresis) matches the ASCII URL slug "citroen" (from
+    "/auto--citroen/") instead of silently never matching."""
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower()
+
+
 class CaradisiacScraper(BaseScraper):
     def __init__(self, target_brands: list[str], checkpoint_store: CheckpointStore, **kwargs):
         super().__init__("caradisiac", **kwargs)
-        self.target_brands = {b.lower() for b in target_brands}
+        self.target_brands = {_normalize(b) for b in target_brands}
         self.checkpoint = checkpoint_store
 
     def discover_brand_hubs(self) -> dict[str, str]:
@@ -23,8 +31,15 @@ class CaradisiacScraper(BaseScraper):
         for link in soup.select("a[href*='/auto--']"):
             href = urljoin(BASE_URL, link["href"])
             slug = href.strip("/").split("--")[-1]
-            if slug.lower() in self.target_brands:
-                hubs[slug.lower()] = href
+            normalized_slug = _normalize(slug)
+            if normalized_slug in self.target_brands:
+                hubs[normalized_slug] = href
+            else:
+                self.logger.info(
+                    "Marque non ciblée ignorée sur /auto--%s/ (aucune correspondance dans "
+                    "target_brands)",
+                    slug,
+                )
         return hubs
 
     def _iter_paginated_links(
@@ -76,17 +91,29 @@ class CaradisiacScraper(BaseScraper):
 
     def scrape_avis(self, avis_url: str) -> Optional[RawPost]:
         soup = self.fetch(avis_url)
-        script = soup.select_one("script[type='application/ld+json']")
-        if not script or not script.string:
-            return None
+        data = None
+        for script in soup.select("script[type='application/ld+json']"):
+            if not script.string:
+                continue
+            try:
+                candidate = json.loads(script.string)
+            except (json.JSONDecodeError, TypeError):
+                # Malformed JSON-LD block on the page -- skip it and keep
+                # checking the remaining scripts rather than crashing.
+                continue
+            if candidate.get("@type") == "Review":
+                data = candidate
+                break
 
-        data = json.loads(script.string)
-        if data.get("@type") != "Review":
+        if data is None:
+            self.logger.warning(
+                "Aucun bloc JSON-LD de type Review trouvé sur %s", avis_url
+            )
             return None
 
         item = data.get("itemReviewed", {})
         brand = item.get("brand", {}).get("name")
-        if not brand or brand.lower() not in self.target_brands:
+        if not brand or _normalize(brand) not in self.target_brands:
             return None
 
         model = item.get("model")

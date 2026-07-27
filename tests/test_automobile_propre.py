@@ -48,6 +48,29 @@ def test_discover_subforums_returns_model_links(tmp_path):
 
 
 @responses.activate
+def test_discover_subforums_filters_out_non_forum_links_and_self_link(tmp_path):
+    # Regression test: discover_subforums previously returned EVERY
+    # [data-ips-hook='title'] a link found on the brand page unfiltered --
+    # this wrongly included a stray /topic/ link (e.g. a pinned announcement)
+    # and even the brand_url's own listing of itself. Real sub-forum links
+    # contain "/forum/" just like topic links contain "/topic/" (already
+    # filtered on in iter_topic_urls).
+    brand_url = "https://forums.automobile-propre.com/forums/forum/12-renault/"
+    responses.add(
+        responses.GET,
+        brand_url,
+        body=load_fixture("automobile_propre_brand_page_mixed_links.html"),
+        status=200,
+    )
+    scraper = make_scraper(tmp_path)
+    subforums = scraper.discover_subforums(brand_url)
+    assert subforums == {
+        "Megane E-Tech": "https://forums.automobile-propre.com/forums/forum/45-megane-e-tech/",
+        "Zoe": "https://forums.automobile-propre.com/forums/forum/46-zoe/",
+    }
+
+
+@responses.activate
 def test_iter_topic_urls_stops_when_page_repeats_same_topics(tmp_path):
     subforum_url = "https://forums.automobile-propre.com/forums/forum/45-megane-e-tech/"
     responses.add(

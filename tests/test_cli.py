@@ -158,6 +158,42 @@ def test_scrape_writes_posts_incrementally_surviving_mid_run_crash(tmp_path, mon
     assert [p.id for p in saved] == ["t1"]
 
 
+def test_scrape_automobile_propre_also_scrapes_topics_posted_directly_under_brand(
+    tmp_path, monkeypatch
+):
+    """Regression test for Finding 4: topics posted directly at the brand-forum
+    level (no model sub-forum) were never scraped -- main.py's orchestration
+    only ever called iter_topic_urls on discovered sub-forums. This asserts
+    that a topic yielded directly on the brand's own forum URL is also
+    scraped and persisted, in addition to the sub-forum's topics."""
+    raw_path = tmp_path / "posts_raw.parquet"
+    checkpoint_path = tmp_path / "progress.json"
+    monkeypatch.setitem(main.SETTINGS["paths"], "raw_posts", str(raw_path))
+    monkeypatch.setitem(main.SETTINGS["paths"], "checkpoint", str(checkpoint_path))
+
+    def scrape_topic_fn(topic_url):
+        if topic_url == "https://x/topic/direct":
+            return [make_raw_post("direct1", "probleme de chauffage direct sous la marque")]
+        return [make_raw_post(f"t-{topic_url[-1]}", "la climatisation ne fonctionne plus")]
+
+    monkeypatch.setattr(
+        main,
+        "AutomobilePropreScraper",
+        make_fake_automobile_propre_scraper(
+            scrape_topic_fn, direct_topic_urls=["https://x/topic/direct"]
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main.cli, ["scrape", "--source", "automobile_propre"])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    saved_ids = {p.id for p in read_posts(raw_path, RawPost)}
+    assert "direct1" in saved_ids
+
+
 def test_scrape_skips_topic_raising_fetcherror_and_continues_with_others(tmp_path, monkeypatch):
     """Regression test: a FetchError raised by scrape_topic (after base.py's own
     retries are exhausted) must be logged and skipped, not abort the whole

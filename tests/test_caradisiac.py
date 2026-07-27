@@ -32,6 +32,26 @@ def test_discover_brand_hubs_filters_target_brands(tmp_path):
 
 
 @responses.activate
+def test_discover_brand_hubs_matches_citroen_despite_diacritic_mismatch(tmp_path):
+    # Regression test: target_brands comes from config/vehicle_list.yaml as
+    # "Citroën" (with the diaeresis), but the site's URL slug is the ASCII
+    # "citroen" (from "/auto--citroen/"). A plain .lower() comparison never
+    # matches these, so Citroën's real hub was silently never discovered even
+    # though it's one of the 15 target brands. This test FAILS against the
+    # pre-fix code (a plain .lower() comparison) and passes once both sides
+    # are diacritic-normalized before comparison.
+    responses.add(
+        responses.GET,
+        "https://www.caradisiac.com/avis/",
+        body='<html><body><a href="/auto--citroen/">Citroën</a></body></html>',
+        status=200,
+    )
+    scraper = make_scraper(tmp_path, target_brands=["Citroën"])
+    hubs = scraper.discover_brand_hubs()
+    assert hubs == {"citroen": "https://www.caradisiac.com/auto--citroen/"}
+
+
+@responses.activate
 def test_iter_model_hub_urls_stops_when_page_repeats(tmp_path):
     # On the real site, model-hub hrefs found on a brand-hub avis-listing page
     # are RELATIVE (e.g. "/modele--renault-zoe/avis/"), not absolute -- the
@@ -123,6 +143,79 @@ def test_scrape_avis_extracts_from_json_ld_and_casts_year_to_str(tmp_path):
     assert "désembuer" in post.text
     assert "Confort de conduite" in post.text
     assert "Désembuage lent" in post.text
+
+
+@responses.activate
+def test_scrape_avis_finds_review_block_when_not_the_first_json_ld_script(tmp_path):
+    # Regression test: scrape_avis used select_one(), returning only the FIRST
+    # script[type='application/ld+json'] block. Real caradisiac pages often
+    # have multiple JSON-LD blocks (BreadcrumbList, Organization, etc.) in
+    # addition to the Review block -- if Review isn't first, the avis was
+    # silently and permanently dropped (the checkpoint already marks the URL
+    # as seen). This test FAILS against select_one() and passes once all
+    # blocks are checked for @type == "Review".
+    avis_url = "https://www.caradisiac.com/avis--modele--renault-megane-e-tech/multi-ld/"
+    page = """
+    <html><body>
+    <script type="application/ld+json">
+    {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": []}
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Review",
+      "reviewBody": "Bonne isolation mais chauffage lent en hiver.",
+      "datePublished": "2023-11-02",
+      "itemReviewed": {
+        "brand": {"name": "Renault"},
+        "model": "Megane E-Tech",
+        "vehicleModelDate": 2022
+      },
+      "author": {"name": "Marc D."}
+    }
+    </script>
+    </body></html>
+    """
+    responses.add(responses.GET, avis_url, body=page, status=200)
+    scraper = make_scraper(tmp_path)
+    post = scraper.scrape_avis(avis_url)
+    assert post is not None
+    assert post.brand_source == "Renault"
+    assert "chauffage lent" in post.text
+
+
+@responses.activate
+def test_scrape_avis_skips_malformed_json_ld_block_and_finds_valid_review(tmp_path):
+    # A malformed (invalid JSON) script block must not crash scrape_avis --
+    # it should be skipped, continuing to check the next block for a valid
+    # Review.
+    avis_url = "https://www.caradisiac.com/avis--modele--renault-megane-e-tech/malformed-ld/"
+    page = """
+    <html><body>
+    <script type="application/ld+json">
+    { this is not valid json at all
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Review",
+      "reviewBody": "Bonne voiture, buée rapide sur les vitres.",
+      "datePublished": "2023-11-02",
+      "itemReviewed": {
+        "brand": {"name": "Renault"},
+        "model": "Megane E-Tech",
+        "vehicleModelDate": 2022
+      },
+      "author": {"name": "Marc D."}
+    }
+    </script>
+    </body></html>
+    """
+    responses.add(responses.GET, avis_url, body=page, status=200)
+    scraper = make_scraper(tmp_path)
+    post = scraper.scrape_avis(avis_url)
+    assert post is not None
+    assert "buée rapide" in post.text
 
 
 @responses.activate
