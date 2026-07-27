@@ -15,6 +15,15 @@ SYSTEM_PROMPT = (
     "pertinent_confort_thermique DOIT être true. Si aucun type de problème de confort thermique "
     "n'est identifié, alors type_probleme doit être une liste vide ET pertinent_confort_thermique "
     "doit être false. Ces deux champs ne doivent jamais se contredire. "
+    "Règle OBLIGATOIRE pour resume_probleme et extrait_source : dès que pertinent_confort_thermique "
+    "est true, ces deux champs DOIVENT être remplis avec un texte non vide (jamais null, jamais "
+    "chaîne vide) — ne les laisse vides que si pertinent_confort_thermique est false. "
+    "resume_probleme est un résumé court (une phrase) du problème de confort thermique décrit. "
+    "extrait_source est une citation courte (quelques mots à une phrase), copiée mot pour mot depuis "
+    "le texte du verbatim, qui illustre ce problème. "
+    "Exemple : pour le verbatim \"la clim peine à désembuer en hiver, ça met un temps fou\", tu "
+    "dois produire resume_probleme=\"Désembuage lent en hiver\" et "
+    "extrait_source=\"la clim peine à désembuer en hiver\". "
     "Réponds STRICTEMENT au format JSON demandé, sans texte autour."
 )
 

@@ -82,6 +82,26 @@ def test_llm_result_accepts_valid_payload():
     assert result.vehicule.marque == "Renault"
 
 
+def test_llm_result_auto_corrects_pertinence_when_type_probleme_present():
+    # Regression test: the LLM occasionally self-contradicts, returning a
+    # non-empty type_probleme while pertinent_confort_thermique is False. The
+    # SYSTEM_PROMPT already asks the model not to do this, but prompt-only
+    # enforcement is probabilistic. This model_validator enforces the rule
+    # structurally: it must auto-correct pertinent_confort_thermique to True
+    # rather than raise, since raising would waste a retry on an otherwise
+    # usable classification.
+    result = LLMClassificationResult(
+        pertinent_confort_thermique=False,
+        pertinence_confidence="haute",
+        vehicule=VehicleInfo(),
+        type_probleme=["buee_desembuage"],
+        type_probleme_confidence="haute",
+        sentiment=3,
+        sentiment_confidence="haute",
+    )
+    assert result.pertinent_confort_thermique is True
+
+
 def test_classified_post_from_raw_and_llm_flattens_vehicle_fields():
     raw = make_raw_post(year_source="2022")
     llm = LLMClassificationResult(

@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Confidence = Literal["haute", "moyenne", "basse"]
 
@@ -71,6 +71,18 @@ class LLMClassificationResult(BaseModel):
     sentiment_confidence: Confidence
     resume_probleme: Optional[str] = None
     extrait_source: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _coherence_pertinence_type_probleme(self) -> "LLMClassificationResult":
+        # Enforce programmatically what the SYSTEM_PROMPT only asks for
+        # probabilistically: if the model identified at least one problem
+        # type, it must have also flagged the post as relevant. We
+        # auto-correct rather than raise, since the rest of the response is
+        # otherwise usable and raising would waste a retry attempt on an
+        # otherwise-good classification (see llm_classifier.py's retry loop).
+        if self.type_probleme and not self.pertinent_confort_thermique:
+            self.pertinent_confort_thermique = True
+        return self
 
 
 class ClassifiedPost(BaseModel):
