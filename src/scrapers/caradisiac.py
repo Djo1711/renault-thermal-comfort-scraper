@@ -94,6 +94,11 @@ class CaradisiacScraper(BaseScraper):
                 # Malformed JSON-LD block on the page -- skip it and keep
                 # checking the remaining scripts rather than crashing.
                 continue
+            if not isinstance(candidate, dict):
+                # A top-level JSON-LD block that isn't an object (e.g. a bare
+                # array of blocks) -- not a Review block we can inspect via
+                # .get(), skip it rather than crash with AttributeError.
+                continue
             if candidate.get("@type") == "Review":
                 data = candidate
                 break
@@ -105,7 +110,17 @@ class CaradisiacScraper(BaseScraper):
             return None
 
         item = data.get("itemReviewed", {})
-        brand = item.get("brand", {}).get("name")
+        brand_raw = item.get("brand")
+        # schema.org's "brand" property accepts either a Brand object
+        # ({"name": "Renault"}) or a plain string shorthand ("Renault") --
+        # both are valid JSON-LD, normalize to a brand-name string either way
+        # instead of crashing with AttributeError on the string form.
+        if isinstance(brand_raw, dict):
+            brand = brand_raw.get("name")
+        elif isinstance(brand_raw, str):
+            brand = brand_raw
+        else:
+            brand = None
         if not brand or _normalize(brand) not in self.target_brands:
             return None
 

@@ -219,6 +219,77 @@ def test_scrape_avis_skips_malformed_json_ld_block_and_finds_valid_review(tmp_pa
 
 
 @responses.activate
+def test_scrape_avis_handles_brand_as_plain_string_shorthand(tmp_path):
+    # Regression test for Finding B: schema.org's "brand" property is valid
+    # JSON-LD either as a Brand object ({"name": "Renault"}) or as a plain
+    # string shorthand ("Renault") -- item.get("brand", {}).get("name")
+    # crashes with AttributeError: 'str' object has no attribute 'get' on
+    # the string form. This test FAILS against that code and passes once
+    # the brand field is normalized to a name string in either shape.
+    avis_url = "https://www.caradisiac.com/avis--modele--renault-megane-e-tech/brand-string/"
+    page = """
+    <html><body>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Review",
+      "reviewBody": "Chauffage capricieux en hiver.",
+      "datePublished": "2023-11-02",
+      "itemReviewed": {
+        "brand": "Renault",
+        "model": "Megane E-Tech",
+        "vehicleModelDate": 2022
+      },
+      "author": {"name": "Marc D."}
+    }
+    </script>
+    </body></html>
+    """
+    responses.add(responses.GET, avis_url, body=page, status=200)
+    scraper = make_scraper(tmp_path)
+    post = scraper.scrape_avis(avis_url)
+    assert post is not None
+    assert post.brand_source == "Renault"
+
+
+@responses.activate
+def test_scrape_avis_skips_top_level_json_ld_array_block(tmp_path):
+    # Regression test for Finding B: a JSON-LD <script> block can legally
+    # contain a top-level array (e.g. multiple structured-data items bundled
+    # together) rather than an object -- candidate.get("@type") crashes with
+    # AttributeError: 'list' object has no attribute 'get' on that block.
+    # This test FAILS against that code and passes once non-dict blocks are
+    # skipped, still finding the later, valid Review block.
+    avis_url = "https://www.caradisiac.com/avis--modele--renault-megane-e-tech/array-ld/"
+    page = """
+    <html><body>
+    <script type="application/ld+json">
+    [{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": []}]
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Review",
+      "reviewBody": "Ventilation bruyante mais efficace.",
+      "datePublished": "2023-11-02",
+      "itemReviewed": {
+        "brand": {"name": "Renault"},
+        "model": "Megane E-Tech",
+        "vehicleModelDate": 2022
+      },
+      "author": {"name": "Marc D."}
+    }
+    </script>
+    </body></html>
+    """
+    responses.add(responses.GET, avis_url, body=page, status=200)
+    scraper = make_scraper(tmp_path)
+    post = scraper.scrape_avis(avis_url)
+    assert post is not None
+    assert "Ventilation bruyante" in post.text
+
+
+@responses.activate
 def test_scrape_avis_returns_none_for_non_target_brand(tmp_path):
     avis_url = "https://www.caradisiac.com/avis--modele--tesla-model3/xyz/"
     responses.add(
