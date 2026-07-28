@@ -126,9 +126,19 @@ def test_scrape_writes_posts_incrementally_surviving_mid_run_crash(tmp_path, mon
     """Regression test for the data-loss bug: previously all scraped posts were
     accumulated in memory for the whole run and written to disk only once at the
     end. If the run crashed partway through, everything scraped so far was lost
-    even though the checkpoint had already marked those topic URLs as seen. This
-    test scrapes two topics where the second one raises, and asserts the first
-    topic's post was still persisted to disk despite the crash.
+    even though the checkpoint had already marked those topic URLs as seen.
+
+    Since Finding B (round 2) broadened the per-topic try/except to catch any
+    exception raised by a single topic's own scrape_topic() call -- not just
+    FetchError -- an exception from *that* call site is no longer a run-ending
+    crash. To still exercise a genuine unrecoverable crash (an unexpected bug
+    that is NOT scoped to one item, e.g. one raised by the topic-discovery
+    generator itself, which only the FetchError guard around it can catch),
+    this test has one topic scraped and persisted successfully, then has
+    iter_topic_urls raise a plain RuntimeError instead of yielding a second
+    topic. That exception is not a FetchError, so it is not caught anywhere,
+    and the whole run aborts -- but the already-scraped topic's post must
+    still be on disk.
     """
     raw_path = tmp_path / "posts_raw.parquet"
     checkpoint_path = tmp_path / "progress.json"
@@ -137,23 +147,35 @@ def test_scrape_writes_posts_incrementally_surviving_mid_run_crash(tmp_path, mon
 
     calls = []
 
-    def scrape_topic_fn(topic_url):
-        calls.append(topic_url)
-        if topic_url == "https://x/topic/2":
-            raise RuntimeError("simulated crash after topic 1 was scraped")
-        return [make_raw_post("t1", "le chauffage ne fonctionne plus")]
+    class CrashingScraper:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    monkeypatch.setattr(
-        main, "AutomobilePropreScraper", make_fake_automobile_propre_scraper(scrape_topic_fn)
-    )
+        def discover_brand_forums(self):
+            return {"Renault": "https://x/forums/renault"}
+
+        def discover_subforums(self, brand_url):
+            return {"Zoe": "https://x/forums/renault/zoe"}
+
+        def iter_topic_urls(self, subforum_url, scope):
+            if subforum_url != "https://x/forums/renault/zoe":
+                return
+            yield "https://x/topic/1"
+            raise RuntimeError("simulated bug in pagination after topic 1 was yielded")
+
+        def scrape_topic(self, topic_url, brand, model):
+            calls.append(topic_url)
+            return [make_raw_post("t1", "le chauffage ne fonctionne plus")]
+
+    monkeypatch.setattr(main, "AutomobilePropreScraper", CrashingScraper)
 
     runner = CliRunner()
     result = runner.invoke(main.cli, ["scrape", "--source", "automobile_propre"])
 
-    assert calls == ["https://x/topic/1", "https://x/topic/2"]
+    assert calls == ["https://x/topic/1"]
     assert result.exception is not None
 
-    # Despite the crash on topic 2, topic 1's post must already be on disk.
+    # Despite the crash, topic 1's post must already be on disk.
     saved = read_posts(raw_path, RawPost)
     assert [p.id for p in saved] == ["t1"]
 
@@ -210,6 +232,133 @@ def test_scrape_skips_topic_raising_fetcherror_and_continues_with_others(tmp_pat
         calls.append(topic_url)
         if topic_url == "https://x/topic/1":
             raise FetchError("échec après 3 tentatives")
+        return [make_raw_post("t2", "la climatisation ne refroidit plus")]
+
+    monkeypatch.setattr(
+        main, "AutomobilePropreScraper", make_fake_automobile_propre_scraper(scrape_topic_fn)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main.cli, ["scrape", "--source", "automobile_propre"])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert calls == ["https://x/topic/1", "https://x/topic/2"]
+
+    saved = read_posts(raw_path, RawPost)
+    assert [p.id for p in saved] == ["t2"]
+
+
+def test_scrape_continues_to_next_brand_when_one_brand_raises_fetcherror(tmp_path, monkeypatch):
+    """Regression test for Finding A: a FetchError raised from discovery/
+    pagination (discover_subforums or iter_topic_urls' own fetch() calls,
+    once base.py's retries are exhausted) for one brand previously propagated
+    all the way out of _scrape_automobile_propre, aborting the ENTIRE run and
+    preventing the other 14 brands from ever being attempted. This asserts
+    that "Renault" failing during discover_subforums does not prevent
+    "Peugeot" -- discovered and iterated afterwards -- from being scraped and
+    persisted."""
+    raw_path = tmp_path / "posts_raw.parquet"
+    checkpoint_path = tmp_path / "progress.json"
+    monkeypatch.setitem(main.SETTINGS["paths"], "raw_posts", str(raw_path))
+    monkeypatch.setitem(main.SETTINGS["paths"], "checkpoint", str(checkpoint_path))
+
+    class MultiBrandScraper:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def discover_brand_forums(self):
+            return {
+                "Renault": "https://x/forums/renault",
+                "Peugeot": "https://x/forums/peugeot",
+            }
+
+        def discover_subforums(self, brand_url):
+            if brand_url == "https://x/forums/renault":
+                raise FetchError("échec après 3 tentatives sur la page de la marque")
+            return {"208": "https://x/forums/peugeot/208"}
+
+        def iter_topic_urls(self, subforum_url, scope):
+            if subforum_url == "https://x/forums/peugeot/208":
+                yield "https://x/topic/peugeot-1"
+            return
+
+        def scrape_topic(self, topic_url, brand, model):
+            return [make_raw_post("p1", "la climatisation fait du bruit")]
+
+    monkeypatch.setattr(main, "AutomobilePropreScraper", MultiBrandScraper)
+
+    runner = CliRunner()
+    result = runner.invoke(main.cli, ["scrape", "--source", "automobile_propre"])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    saved_ids = {p.id for p in read_posts(raw_path, RawPost)}
+    assert "p1" in saved_ids
+
+
+def test_scrape_source_all_still_runs_second_source_when_first_fails_entirely(
+    tmp_path, monkeypatch
+):
+    """Regression test for Finding A: with --source all, a FetchError that
+    escapes the whole automobile_propre run (e.g. its very first discovery
+    call failing outright, before any per-brand guard even applies)
+    previously propagated out of the scrape() command entirely, so caradisiac
+    -- the second source -- was never even attempted. This asserts caradisiac
+    still runs and its post is persisted despite automobile_propre's total
+    failure."""
+    raw_path = tmp_path / "posts_raw.parquet"
+    checkpoint_path = tmp_path / "progress.json"
+    monkeypatch.setitem(main.SETTINGS["paths"], "raw_posts", str(raw_path))
+    monkeypatch.setitem(main.SETTINGS["paths"], "checkpoint", str(checkpoint_path))
+
+    class TotallyFailingAutomobilePropreScraper:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def discover_brand_forums(self):
+            raise FetchError("échec après 3 tentatives sur la page des forums")
+
+    def scrape_avis_fn(avis_url):
+        return make_raw_post("c1", "la ventilation est bruyante")
+
+    monkeypatch.setattr(
+        main, "AutomobilePropreScraper", TotallyFailingAutomobilePropreScraper
+    )
+    monkeypatch.setattr(main, "CaradisiacScraper", make_fake_caradisiac_scraper(scrape_avis_fn))
+
+    runner = CliRunner()
+    result = runner.invoke(main.cli, ["scrape", "--source", "all"])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    saved_ids = {p.id for p in read_posts(raw_path, RawPost)}
+    assert "c1" in saved_ids
+
+
+def test_scrape_topic_raising_unexpected_exception_continues_with_others(tmp_path, monkeypatch):
+    """Regression test for Finding B: previously only FetchError was caught
+    around the single-topic scrape_topic() call. Any other exception (e.g. an
+    AttributeError from a JSON-LD parsing bug, or a pydantic ValidationError
+    from a malformed datePublished) crashed the whole run -- and, since the
+    checkpoint only records a page as done after ALL its topics are consumed,
+    a rerun would re-fetch the same page, hit the same item, and crash again
+    identically, forever. This asserts an unexpected (non-FetchError)
+    exception on one topic is logged and skipped, and the next topic in the
+    same brand/model is still scraped and persisted."""
+    raw_path = tmp_path / "posts_raw.parquet"
+    checkpoint_path = tmp_path / "progress.json"
+    monkeypatch.setitem(main.SETTINGS["paths"], "raw_posts", str(raw_path))
+    monkeypatch.setitem(main.SETTINGS["paths"], "checkpoint", str(checkpoint_path))
+
+    calls = []
+
+    def scrape_topic_fn(topic_url):
+        calls.append(topic_url)
+        if topic_url == "https://x/topic/1":
+            raise AttributeError("'NoneType' object has no attribute 'get'")
         return [make_raw_post("t2", "la climatisation ne refroidit plus")]
 
     monkeypatch.setattr(

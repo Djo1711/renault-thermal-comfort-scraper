@@ -35,54 +35,93 @@ def _scrape_automobile_propre(
 ) -> int:
     """Scrape all target brands/subforums/topics, writing each topic's posts to disk
     as soon as it is scraped so a mid-run interruption cannot lose already-scraped
-    content. A single topic that fails after exhausting base.py's retries is
-    logged and skipped rather than aborting the whole run. Returns the total
-    number of newly written posts."""
+    content.
+
+    Two independent layers of fault isolation:
+    - A single topic whose scrape_topic() call raises (a FetchError after
+      base.py's retries are exhausted, or any other unexpected exception --
+      e.g. a parsing bug on that one page) is logged and skipped rather than
+      aborting the whole run.
+    - A FetchError raised anywhere else for a given brand -- discover_subforums,
+      or iter_topic_urls' own fetch() calls once ITS retries are exhausted --
+      aborts only that brand and moves on to the next one, so one brand's
+      listing/pagination trouble doesn't stop the other 14 brands from being
+      attempted.
+
+    Returns the total number of newly written posts."""
     written_total = 0
     for brand, brand_url in scraper.discover_brand_forums().items():
-        for model, model_url in scraper.discover_subforums(brand_url).items():
-            scope = f"automobile_propre:{brand}:{model}"
-            for topic_url in scraper.iter_topic_urls(model_url, scope):
+        try:
+            for model, model_url in scraper.discover_subforums(brand_url).items():
+                scope = f"automobile_propre:{brand}:{model}"
+                for topic_url in scraper.iter_topic_urls(model_url, scope):
+                    try:
+                        topic_posts = scraper.scrape_topic(topic_url, brand=brand, model=model)
+                    except Exception as exc:
+                        logger.warning(
+                            "Topic ignoré après erreur (%s) sur %s: %s",
+                            type(exc).__name__, topic_url, exc,
+                        )
+                        continue
+                    written_total += append_posts(raw_posts_path, topic_posts)
+
+            # Topics can also be posted directly at the brand-forum level (no
+            # model sub-forum) -- scrape the brand's own forum URL too, under a
+            # distinct scope so it doesn't collide with any sub-forum's checkpoint.
+            direct_scope = f"automobile_propre:{brand}:_direct"
+            for topic_url in scraper.iter_topic_urls(brand_url, direct_scope):
                 try:
-                    topic_posts = scraper.scrape_topic(topic_url, brand=brand, model=model)
-                except FetchError as exc:
-                    logger.warning("Topic ignoré après échec de récupération %s: %s", topic_url, exc)
+                    topic_posts = scraper.scrape_topic(topic_url, brand=brand, model=None)
+                except Exception as exc:
+                    logger.warning(
+                        "Topic ignoré après erreur (%s) sur %s: %s",
+                        type(exc).__name__, topic_url, exc,
+                    )
                     continue
                 written_total += append_posts(raw_posts_path, topic_posts)
-
-        # Topics can also be posted directly at the brand-forum level (no
-        # model sub-forum) -- scrape the brand's own forum URL too, under a
-        # distinct scope so it doesn't collide with any sub-forum's checkpoint.
-        direct_scope = f"automobile_propre:{brand}:_direct"
-        for topic_url in scraper.iter_topic_urls(brand_url, direct_scope):
-            try:
-                topic_posts = scraper.scrape_topic(topic_url, brand=brand, model=None)
-            except FetchError as exc:
-                logger.warning("Topic ignoré après échec de récupération %s: %s", topic_url, exc)
-                continue
-            written_total += append_posts(raw_posts_path, topic_posts)
+        except FetchError as exc:
+            logger.warning(
+                "Marque automobile_propre:%s ignorée après échec de récupération: %s", brand, exc
+            )
+            continue
     return written_total
 
 
 def _scrape_caradisiac(scraper: CaradisiacScraper, raw_posts_path: str, logger) -> int:
     """Scrape all target brand hubs/model hubs/avis, writing each avis to disk as
     soon as it is scraped so a mid-run interruption cannot lose already-scraped
-    content. A single avis that fails after exhausting base.py's retries is
-    logged and skipped rather than aborting the whole run. Returns the total
-    number of newly written posts."""
+    content.
+
+    Two independent layers of fault isolation, mirroring
+    _scrape_automobile_propre: a single avis's scrape_avis() call raising
+    (FetchError or any other unexpected exception) is logged and skipped; a
+    FetchError raised anywhere else for a given brand (iter_model_hub_urls or
+    iter_avis_urls' own fetch() calls once retries are exhausted) aborts only
+    that brand and moves on to the next one.
+
+    Returns the total number of newly written posts."""
     written_total = 0
     for brand, brand_hub_url in scraper.discover_brand_hubs().items():
-        model_scope = f"caradisiac:{brand}"
-        for model_hub_url in scraper.iter_model_hub_urls(brand_hub_url, scope=model_scope):
-            avis_scope = f"caradisiac:{brand}:{model_hub_url}"
-            for avis_url in scraper.iter_avis_urls(model_hub_url, scope=avis_scope):
-                try:
-                    post = scraper.scrape_avis(avis_url)
-                except FetchError as exc:
-                    logger.warning("Avis ignoré après échec de récupération %s: %s", avis_url, exc)
-                    continue
-                if post:
-                    written_total += append_posts(raw_posts_path, [post])
+        try:
+            model_scope = f"caradisiac:{brand}"
+            for model_hub_url in scraper.iter_model_hub_urls(brand_hub_url, scope=model_scope):
+                avis_scope = f"caradisiac:{brand}:{model_hub_url}"
+                for avis_url in scraper.iter_avis_urls(model_hub_url, scope=avis_scope):
+                    try:
+                        post = scraper.scrape_avis(avis_url)
+                    except Exception as exc:
+                        logger.warning(
+                            "Avis ignoré après erreur (%s) sur %s: %s",
+                            type(exc).__name__, avis_url, exc,
+                        )
+                        continue
+                    if post:
+                        written_total += append_posts(raw_posts_path, [post])
+        except FetchError as exc:
+            logger.warning(
+                "Marque caradisiac:%s ignorée après échec de récupération: %s", brand, exc
+            )
+            continue
     return written_total
 
 
@@ -106,12 +145,20 @@ def scrape(source):
 
     for src_name in sources:
         raw_posts_path = SETTINGS["paths"]["raw_posts"]
-        if src_name == "automobile_propre":
-            scraper = AutomobilePropreScraper(target_brands=VEHICLE_LIST, **common_kwargs)
-            written = _scrape_automobile_propre(scraper, raw_posts_path, logger)
-        else:
-            scraper = CaradisiacScraper(target_brands=VEHICLE_LIST, **common_kwargs)
-            written = _scrape_caradisiac(scraper, raw_posts_path, logger)
+        try:
+            if src_name == "automobile_propre":
+                scraper = AutomobilePropreScraper(target_brands=VEHICLE_LIST, **common_kwargs)
+                written = _scrape_automobile_propre(scraper, raw_posts_path, logger)
+            else:
+                scraper = CaradisiacScraper(target_brands=VEHICLE_LIST, **common_kwargs)
+                written = _scrape_caradisiac(scraper, raw_posts_path, logger)
+        except FetchError as exc:
+            # A FetchError that escapes the whole source (e.g. its very first
+            # discovery call, discover_brand_forums/discover_brand_hubs,
+            # failing outright) must not prevent the other source from being
+            # attempted when --source all is used.
+            logger.warning("Source %s ignorée après échec de récupération: %s", src_name, exc)
+            continue
 
         logger.info("%s: %d nouveaux posts écrits", src_name, written)
         console.print(f"[green]{src_name}[/green] : {written} nouveaux posts")
