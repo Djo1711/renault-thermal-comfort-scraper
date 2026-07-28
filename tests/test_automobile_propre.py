@@ -32,6 +32,34 @@ def test_discover_brand_forums_filters_target_brands(tmp_path):
 
 
 @responses.activate
+def test_discover_brand_forums_matches_citroen_despite_diacritic_mismatch(tmp_path):
+    # Regression test for Finding C: target_brands comes from
+    # config/vehicle_list.yaml as "Citroën" (with the diaeresis), but a forum
+    # heading rendered without it ("Citroen") previously never matched
+    # AutomobilePropreScraper's plain .lower() comparison, silently dropping
+    # the forum -- exactly the failure mode already fixed for caradisiac.py.
+    # This test FAILS against a plain .lower() comparison and passes once
+    # both sides are diacritic-normalized before comparison.
+    responses.add(
+        responses.GET,
+        "https://forums.automobile-propre.com/forums/",
+        body=(
+            "<html><body><div class='ipsDataList'>"
+            "<h4 data-ips-hook='title'>"
+            "<a href='https://forums.automobile-propre.com/forums/forum/99-citroen/'>Citroen</a>"
+            "</h4>"
+            "</div></body></html>"
+        ),
+        status=200,
+    )
+    scraper = make_scraper(tmp_path, target_brands=["Citroën"])
+    forums = scraper.discover_brand_forums()
+    assert forums == {
+        "Citroen": "https://forums.automobile-propre.com/forums/forum/99-citroen/"
+    }
+
+
+@responses.activate
 def test_discover_subforums_returns_model_links(tmp_path):
     responses.add(
         responses.GET,

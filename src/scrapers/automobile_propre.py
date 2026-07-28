@@ -4,6 +4,7 @@ from typing import Iterator, Optional
 from src.scrapers.base import BaseScraper, HTTPStatusError
 from src.storage.models import RawPost, make_post_id
 from src.utils.checkpoint import CheckpointStore
+from src.utils.text import normalize_text
 
 FORUMS_URL = "https://forums.automobile-propre.com/forums/"
 
@@ -11,7 +12,7 @@ FORUMS_URL = "https://forums.automobile-propre.com/forums/"
 class AutomobilePropreScraper(BaseScraper):
     def __init__(self, target_brands: list[str], checkpoint_store: CheckpointStore, **kwargs):
         super().__init__("automobile_propre", **kwargs)
-        self.target_brands = {b.lower() for b in target_brands}
+        self.target_brands = {normalize_text(b) for b in target_brands}
         self.checkpoint = checkpoint_store
 
     def discover_brand_forums(self) -> dict[str, str]:
@@ -20,7 +21,7 @@ class AutomobilePropreScraper(BaseScraper):
         forums = {}
         for link in links:
             heading = link.get_text(strip=True)
-            if heading.lower() in self.target_brands:
+            if normalize_text(heading) in self.target_brands:
                 forums[heading] = link["href"]
             else:
                 self.logger.info(

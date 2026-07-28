@@ -1,5 +1,4 @@
 import json
-import unicodedata
 from datetime import datetime, timezone
 from typing import Callable, Iterator, Optional
 from urllib.parse import urljoin
@@ -7,16 +6,10 @@ from urllib.parse import urljoin
 from src.scrapers.base import BaseScraper, HTTPStatusError
 from src.storage.models import RawPost, make_post_id
 from src.utils.checkpoint import CheckpointStore
+from src.utils.text import normalize_text as _normalize
 
 BASE_URL = "https://www.caradisiac.com"
 AVIS_INDEX_URL = f"{BASE_URL}/avis/"
-
-
-def _normalize(s: str) -> str:
-    """Strip diacritics and lowercase, so "Citroën" (config/vehicle_list.yaml,
-    with the diaeresis) matches the ASCII URL slug "citroen" (from
-    "/auto--citroen/") instead of silently never matching."""
-    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii").lower()
 
 
 class CaradisiacScraper(BaseScraper):
